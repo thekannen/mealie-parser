@@ -134,6 +134,7 @@ Notes:
 - `docker-compose.yml` uses `restart: on-failure` so successful `RUN_MODE=once` runs do not auto-restart in a tight loop.
 - Repeated review patterns are log-sampled (`seen=<n>`) to keep logs readable; full per-recipe details remain in `reports/review_low_confidence.json`.
 - Fully blank parsed ingredient artifacts are auto-dropped so a single empty line does not block patching the rest of a recipe.
+- Input cleanup now normalizes odd fraction glyphs (for example `¹/₂` -> `1/2`) and drops section header lines (for example `For the sauce`, `DRESSING:`) before parser attempts.
 
 ## Local development / manual Linux run
 

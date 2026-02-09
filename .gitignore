@@ -9,3 +9,4 @@ parsed_success.log
 review_low_confidence.json
 .ruff_cache/
 *.egg-info/
+.DS_Store

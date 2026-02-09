@@ -19,6 +19,22 @@ LOGGER = logging.getLogger(__name__)
 
 SERVING_PHRASES = {"for serving", "for garnish", "for dipping"}
 QUANTITY_PREFIX_RE = re.compile(r"^\s*\d+[¼½¾⅓⅔⅛⅜⅝⅞/\s\-]*")
+NON_INGREDIENT_PREFIX_RE = re.compile(r"^(for|to)\s+", re.IGNORECASE)
+ZERO_QTY_ALLOWED_UNITS = {"pinch", "dash"}
+FRACTION_TEXT_REPLACEMENTS = {
+    "¹/₂": "1/2",
+    "¹/₄": "1/4",
+    "³/₄": "3/4",
+    "¼": "1/4",
+    "½": "1/2",
+    "¾": "3/4",
+    "⅓": "1/3",
+    "⅔": "2/3",
+    "⅛": "1/8",
+    "⅜": "3/8",
+    "⅝": "5/8",
+    "⅞": "7/8",
+}
 
 
 class AlreadyParsed(Exception):
@@ -94,6 +110,50 @@ def extract_raw_lines(recipe_json: dict[str, Any]) -> list[str]:
         ]
 
     return []
+
+
+def sanitize_raw_lines(lines: list[str]) -> tuple[list[str], int]:
+    cleaned: list[str] = []
+    dropped = 0
+
+    for raw in lines:
+        line = _normalize_line_text(raw)
+        if not line:
+            dropped += 1
+            continue
+        if _is_non_ingredient_header(line):
+            dropped += 1
+            continue
+        cleaned.append(line)
+
+    return cleaned, dropped
+
+
+def _normalize_line_text(line: str) -> str:
+    normalized = str(line).strip()
+    for old, new in FRACTION_TEXT_REPLACEMENTS.items():
+        normalized = normalized.replace(old, new)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _is_non_ingredient_header(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+
+    # e.g. "DRESSING:", "For the tart shell", "To serve"
+    if (
+        stripped.endswith(":")
+        and len(stripped.split()) <= 8
+        and not re.search(r"\d", stripped)
+    ):
+        return True
+    if NON_INGREDIENT_PREFIX_RE.match(stripped) and len(stripped.split()) <= 8:
+        if not re.search(r"\d", stripped):
+            return True
+
+    return False
 
 
 def parse_with_fallback(
@@ -229,8 +289,11 @@ def _suspicion_reason(ingredient: dict[str, Any]) -> str | None:
 
     quantity = _quantity_value(ingredient.get("quantity"))
     unit = ingredient.get("unit")
+    unit_name = _entity_name(unit)
 
     if quantity == 0 and unit is not None:
+        if unit_name in ZERO_QTY_ALLOWED_UNITS or "to taste" in note:
+            return None
         return "zero_qty_with_unit"
 
     if ingredient.get("food") is None and not note:
@@ -255,6 +318,12 @@ def _has_entity(entity: Any) -> bool:
         entity_name = str(entity.get("name") or "").strip()
         return bool(entity_id or entity_name)
     return True
+
+
+def _entity_name(entity: Any) -> str:
+    if not isinstance(entity, dict):
+        return ""
+    return str(entity.get("name") or "").strip().lower()
 
 
 def _suspicious_reason_counts(ingredients: list[dict[str, Any]]) -> dict[str, int]:
@@ -406,6 +475,30 @@ def run_parser(config: ParserConfig) -> RunSummary:
 
         if not raw_lines:
             summary.skipped_empty += 1
+            continue
+
+        raw_lines, dropped_input_lines = sanitize_raw_lines(raw_lines)
+        if dropped_input_lines and line_logs:
+            LOGGER.info(
+                "recipe=%s index=%s/%s status=cleanup dropped_input_lines=%s",
+                slug,
+                index,
+                summary.total_candidates,
+                dropped_input_lines,
+            )
+
+        if not raw_lines:
+            summary.skipped_empty += 1
+            if line_logs:
+                LOGGER.info(
+                    (
+                        "recipe=%s index=%s/%s status=skip "
+                        "reason=no_ingredient_lines_after_input_cleanup"
+                    ),
+                    slug,
+                    index,
+                    summary.total_candidates,
+                )
             continue
 
         parsed_block, parser_used, attempts = parse_with_fallback(

@@ -9,6 +9,7 @@ from mealie_parser.parser import (
     looks_suspicious,
     normalize_parsed_block,
     parse_with_fallback,
+    sanitize_raw_lines,
 )
 
 
@@ -66,6 +67,17 @@ def test_looks_suspicious_detects_zero_qty_with_unit() -> None:
 def test_looks_suspicious_ignores_serving_notes() -> None:
     assert not looks_suspicious(
         {"quantity": 0, "unit": {"id": "unit-1"}, "note": "For garnish"}
+    )
+
+
+def test_looks_suspicious_allows_pinch_without_quantity() -> None:
+    assert not looks_suspicious(
+        {
+            "quantity": 0,
+            "unit": {"id": "unit-1", "name": "pinch"},
+            "food": {"id": "food-1", "name": "salt"},
+            "note": "",
+        }
     )
 
 
@@ -198,3 +210,16 @@ def test_normalize_parsed_block_drops_blank_ingredients() -> None:
     assert normalized[0]["food"] == {"id": "food-1", "name": "Sugar"}
     assert suspicious_reasons == {}
     assert dropped_blank == 1
+
+
+def test_sanitize_raw_lines_drops_headers_and_normalizes_fractions() -> None:
+    lines = [
+        "For the sauce",
+        "DRESSING:",
+        "¹/₂ tsp salt",
+        " 2   tbsp olive oil ",
+    ]
+    cleaned, dropped = sanitize_raw_lines(lines)
+
+    assert cleaned == ["1/2 tsp salt", "2 tbsp olive oil"]
+    assert dropped == 2
