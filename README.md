@@ -1,1 +1,157 @@
-Add flags for confidence level you want to add an ingredient or force which parser to use.
+# Mealie Parser
+
+Mealie Parser bulk-parses unparsed recipe ingredients in Mealie and safely patches structured ingredient data back to recipes.
+
+It supports:
+- Parser fallback order (for example `nlp` then `openai`)
+- Confidence threshold filtering
+- Suspicious-line detection and review report output
+- Dry-run mode
+- Docker one-shot or loop execution
+- Manual Linux/macOS execution
+
+## Credit
+
+This project is a refreshed fork of the original script authored by **Nathan Lynch** (`N Lynch`) and keeps that parser workflow as the foundation.
+
+## Project layout
+
+```text
+.
+├── scripts/
+│   ├── docker/
+│   │   └── entrypoint.sh
+│   └── install/
+│       └── ubuntu_setup_mealie_parser.sh
+├── src/mealie_parser/
+├── tests/
+├── .env.example
+├── docker-compose.yml
+└── README.md
+```
+
+## Configuration model
+
+- `.env`: environment-specific settings and secrets
+- CLI args: per-run overrides
+
+Priority order:
+1. CLI flags
+2. Environment variables (`.env`, container env)
+3. Built-in defaults
+
+## Environment variables
+
+Required:
+- `MEALIE_BASE_URL` (example: `http://192.168.1.50:9000/api`)
+- `MEALIE_API_TOKEN` (or `MEALIE_API_KEY`)
+
+Common optional:
+- `CONFIDENCE_THRESHOLD` (default `0.80`)
+- `PARSER_STRATEGIES` (default `nlp,openai`)
+- `FORCE_PARSER` (override fallback order)
+- `DRY_RUN` (`true` or `false`)
+- `MAX_RECIPES` (limit count for trial runs)
+- `AFTER_SLUG` (resume from a known slug)
+- `OUTPUT_DIR` (default `reports`)
+
+See `.env.example` for full options.
+
+## Quick start (Docker)
+
+1. Clone and enter the repo.
+
+```bash
+git clone https://github.com/thekannen/mealie-parser.git
+cd mealie-parser
+```
+
+2. Create env file.
+
+```bash
+cp .env.example .env
+```
+
+3. Edit `.env` with your Mealie URL and API token.
+
+4. Build and run.
+
+```bash
+docker compose up --build
+```
+
+Loop mode (every 6 hours):
+
+```bash
+docker compose run --rm \
+  -e RUN_MODE=loop \
+  -e RUN_INTERVAL_SECONDS=21600 \
+  mealie-parser
+```
+
+## Local development / manual Linux run
+
+1. Create venv and install.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -e .
+```
+
+2. Create env file.
+
+```bash
+cp .env.example .env
+```
+
+3. Run parser.
+
+```bash
+python -m mealie_parser
+```
+
+Useful CLI options:
+
+```bash
+# Trial run
+python -m mealie_parser --max 20 --dry-run
+
+# Higher confidence and forced parser
+python -m mealie_parser --conf 0.9 --force-parser openai
+
+# Resume after a specific slug
+python -m mealie_parser --after-slug chicken-tikka-masala
+```
+
+Installed CLI after `pip install -e .`:
+
+```bash
+mealie-parser --help
+```
+
+## Ubuntu helper
+
+You can bootstrap dependencies and venv on Ubuntu:
+
+```bash
+./scripts/install/ubuntu_setup_mealie_parser.sh
+```
+
+Optional flags:
+- `--repo-dir <path>`
+- `--setup-cron`
+- `--cron-schedule "0 */6 * * *"`
+
+## Output artifacts
+
+By default under `reports/`:
+- `parsed_success.log`: recipe names successfully parsed/patched
+- `review_low_confidence.json`: recipes requiring manual review
+
+## Testing
+
+```bash
+pytest
+```

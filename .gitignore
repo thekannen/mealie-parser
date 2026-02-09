@@ -1,0 +1,11 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+reports/
+last_payload.json
+parsed_success.log
+review_low_confidence.json
+.ruff_cache/
+*.egg-info/
