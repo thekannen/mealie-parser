@@ -4,12 +4,13 @@ services:
       context: .
     image: mealie-parser:latest
     container_name: mealie-parser
-    restart: unless-stopped
+    restart: on-failure
     env_file:
       - .env
     environment:
-      RUN_MODE: once
-      RUN_INTERVAL_SECONDS: 21600
+      RUN_MODE: ${RUN_MODE:-loop}
+      RUN_INTERVAL_SECONDS: ${RUN_INTERVAL_SECONDS:-21600}
+      PARSER_ARGS: ${PARSER_ARGS:-}
     volumes:
       - ./reports:/app/reports
     extra_hosts:

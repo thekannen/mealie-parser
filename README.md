@@ -119,10 +119,19 @@ docker compose run --rm \
   mealie-parser
 ```
 
+One-shot mode (run once and exit cleanly):
+
+```bash
+docker compose run --rm \
+  -e RUN_MODE=once \
+  mealie-parser
+```
+
 Notes:
 - Portainer's `No log line matching the '' filter` usually means the container produced no log output yet, often because one-shot mode exited quickly.
 - Exact weekly scheduling at Sunday 6:00 AM is best done with host cron/systemd timers; interval loop mode cannot align to weekday/time boundaries by itself.
 - In non-interactive runs (Docker/Portainer), parser output is emitted as one structured line per recipe instead of a tqdm progress bar.
+- `docker-compose.yml` uses `restart: on-failure` so successful `RUN_MODE=once` runs do not auto-restart in a tight loop.
 
 ## Local development / manual Linux run
 
