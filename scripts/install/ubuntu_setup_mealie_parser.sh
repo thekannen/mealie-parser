@@ -55,7 +55,9 @@ echo "Install complete."
 echo "Run once with: $REPO_DIR/.venv/bin/python -m mealie_parser"
 
 if [[ "$SETUP_CRON" == true ]]; then
-  CRON_CMD="$CRON_SCHEDULE cd $REPO_DIR && $REPO_DIR/.venv/bin/python -m mealie_parser >> $REPO_DIR/reports/cron.log 2>&1"
-  (crontab -l 2>/dev/null | grep -v "mealie_parser"; echo "$CRON_CMD # mealie_parser") | crontab -
+  CRON_CMD="$CRON_SCHEDULE /bin/bash -lc 'cd \"$REPO_DIR\" && \"$REPO_DIR/.venv/bin/python\" -m mealie_parser >> \"$REPO_DIR/reports/cron.log\" 2>&1' # mealie_parser"
+  (crontab -l 2>/dev/null | grep -v "# mealie_parser"; echo "$CRON_CMD") | crontab -
   echo "Cron installed: $CRON_SCHEDULE"
+  echo "Current entry:"
+  crontab -l | grep "# mealie_parser" || true
 fi

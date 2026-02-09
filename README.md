@@ -144,6 +144,15 @@ Optional flags:
 - `--setup-cron`
 - `--cron-schedule "0 */6 * * *"`
 
+Sunday at 6:00 AM schedule:
+
+```bash
+./scripts/install/ubuntu_setup_mealie_parser.sh \
+  --repo-dir "/Users/aaron/Library/CloudStorage/GoogleDrive-thekannengieser@gmail.com/My Drive/Repos/mealie-parser" \
+  --setup-cron \
+  --cron-schedule "0 6 * * 0"
+```
+
 ## Output artifacts
 
 By default under `reports/`:
