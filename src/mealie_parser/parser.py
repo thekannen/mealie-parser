@@ -244,6 +244,15 @@ def _short_error(exc: Exception, max_len: int = 220) -> str:
     return f"{text[:max_len-3]}..."
 
 
+def _format_attempts(attempts: list[dict[str, str]]) -> str:
+    if not attempts:
+        return "none"
+    return "; ".join(
+        f"{item.get('strategy', '?')}={item.get('error', 'unknown')}"
+        for item in attempts
+    )
+
+
 def run_parser(config: ParserConfig) -> RunSummary:
     if not config.base_url:
         raise ValueError("MEALIE_BASE_URL is required")
@@ -342,11 +351,12 @@ def run_parser(config: ParserConfig) -> RunSummary:
                 LOGGER.info(
                     (
                         "recipe=%s index=%s/%s status=review "
-                        "reason=parser_failed_threshold"
+                        "reason=parser_failed_threshold attempts=%s"
                     ),
                     slug,
                     index,
                     summary.total_candidates,
+                    _format_attempts(attempts),
                 )
             continue
 

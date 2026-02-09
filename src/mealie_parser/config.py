@@ -40,6 +40,8 @@ class ParserConfig:
 
         if force_parser:
             parser_strategies = (force_parser,)
+        else:
+            parser_strategies = _ensure_fallback_strategies(parser_strategies)
 
         api_token = (
             os.getenv("MEALIE_API_TOKEN", "").strip()
@@ -106,3 +108,11 @@ def _int_or_none(value: str | None) -> int | None:
 def _clean_base_url(value: str) -> str:
     value = value.strip().rstrip("/")
     return value
+
+
+def _ensure_fallback_strategies(strategies: tuple[str, ...]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for strategy in (*strategies, *DEFAULT_PARSER_STRATEGIES):
+        if strategy not in ordered:
+            ordered.append(strategy)
+    return tuple(ordered)

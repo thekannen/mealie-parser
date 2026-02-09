@@ -49,7 +49,7 @@ Required:
 
 Common optional:
 - `CONFIDENCE_THRESHOLD` (default `0.80`)
-- `PARSER_STRATEGIES` (default `nlp,openai`)
+- `PARSER_STRATEGIES` (default `nlp,openai`; defaults are still used as fallback unless `FORCE_PARSER` is set)
 - `FORCE_PARSER` (override fallback order)
 - `DRY_RUN` (`true` or `false`)
 - `MAX_RECIPES` (limit count for trial runs)

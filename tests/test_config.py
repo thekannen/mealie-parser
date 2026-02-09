@@ -36,3 +36,14 @@ def test_from_env_uses_mealie_api_key_fallback(monkeypatch) -> None:
     config = ParserConfig.from_env()
 
     assert config.api_token == "token-from-key"
+
+
+def test_from_env_always_keeps_default_fallback_order(monkeypatch) -> None:
+    monkeypatch.setenv("MEALIE_BASE_URL", "http://localhost:9000/api")
+    monkeypatch.setenv("MEALIE_API_TOKEN", "token")
+    monkeypatch.setenv("PARSER_STRATEGIES", "nlp")
+    monkeypatch.delenv("FORCE_PARSER", raising=False)
+
+    config = ParserConfig.from_env()
+
+    assert config.parser_strategies == ("nlp", "openai")
