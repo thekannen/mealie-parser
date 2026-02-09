@@ -20,7 +20,8 @@ This project is a refreshed fork of the original script authored by **Nathan Lyn
 .
 ├── scripts/
 │   ├── docker/
-│   │   └── entrypoint.sh
+│   │   ├── entrypoint.sh
+│   │   └── update.sh
 │   └── install/
 │       └── ubuntu_setup_mealie_parser.sh
 ├── src/mealie_parser/
@@ -80,6 +81,35 @@ cp .env.example .env
 docker compose up --build
 ```
 
+If you want continuously visible logs in Docker/Portainer, run loop mode and verbose parser logs:
+
+```bash
+docker compose up -d --build
+docker compose run --rm \
+  -e RUN_MODE=loop \
+  -e RUN_INTERVAL_SECONDS=21600 \
+  -e PARSER_ARGS="--verbose" \
+  mealie-parser
+```
+
+To inspect logs from CLI:
+
+```bash
+docker compose logs -f --tail=200 mealie-parser
+```
+
+Update to latest published git + redeploy:
+
+```bash
+./scripts/docker/update.sh
+```
+
+Useful options:
+- `--skip-git-pull`
+- `--no-build`
+- `--branch <name>`
+- `--prune`
+
 Loop mode (every 6 hours):
 
 ```bash
@@ -88,6 +118,11 @@ docker compose run --rm \
   -e RUN_INTERVAL_SECONDS=21600 \
   mealie-parser
 ```
+
+Notes:
+- Portainer's `No log line matching the '' filter` usually means the container produced no log output yet, often because one-shot mode exited quickly.
+- Exact weekly scheduling at Sunday 6:00 AM is best done with host cron/systemd timers; interval loop mode cannot align to weekday/time boundaries by itself.
+- In non-interactive runs (Docker/Portainer), parser output is emitted as one structured line per recipe instead of a tqdm progress bar.
 
 ## Local development / manual Linux run
 

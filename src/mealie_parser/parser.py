@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -30,6 +31,12 @@ class RunSummary:
     requires_review: int = 0
     skipped_empty: int = 0
     skipped_already_parsed: int = 0
+
+
+@dataclass
+class FoodCreateLogState:
+    duplicate_logged: set[str]
+    failed_logged: set[str]
 
 
 def slim(obj: dict[str, Any] | None) -> dict[str, str] | None:
@@ -122,7 +129,9 @@ def parse_with_fallback(
 
 
 def ensure_food_object(
-    client: MealieClient, food: dict[str, Any] | None
+    client: MealieClient,
+    food: dict[str, Any] | None,
+    log_state: FoodCreateLogState,
 ) -> dict[str, str] | None:
     if not isinstance(food, dict):
         return None
@@ -137,7 +146,25 @@ def ensure_food_object(
     try:
         created = client.create_food(name)
     except requests.RequestException as exc:
-        LOGGER.warning("Could not create food '%s': %s", name, exc)
+        if _is_duplicate_food_error(str(exc)):
+            if name not in log_state.duplicate_logged:
+                LOGGER.info(
+                    (
+                        "food_create_duplicate name=%r; "
+                        "keeping parser result for manual review"
+                    ),
+                    name,
+                )
+                log_state.duplicate_logged.add(name)
+            return None
+
+        if name not in log_state.failed_logged:
+            LOGGER.warning(
+                "food_create_failed name=%r error=%s",
+                name,
+                _short_error(exc),
+            )
+            log_state.failed_logged.add(name)
         return None
     return slim(created)
 
@@ -145,13 +172,18 @@ def ensure_food_object(
 def normalize_parsed_block(
     client: MealieClient,
     parsed_block: list[dict[str, Any]],
+    log_state: FoodCreateLogState,
 ) -> tuple[list[dict[str, Any]], bool]:
     normalized: list[dict[str, Any]] = []
     has_suspicious_line = False
 
     for item in parsed_block:
         ingredient = dict(item.get("ingredient") or {})
-        ingredient["food"] = ensure_food_object(client, ingredient.get("food"))
+        ingredient["food"] = ensure_food_object(
+            client,
+            ingredient.get("food"),
+            log_state,
+        )
         ingredient["unit"] = slim(ingredient.get("unit"))
         ingredient.pop("confidence", None)
         ingredient.pop("display", None)
@@ -197,6 +229,21 @@ def _quantity_value(value: Any) -> float:
         return 0.0
 
 
+def _is_duplicate_food_error(message: str) -> bool:
+    lowered = message.lower()
+    return (
+        "duplicate key value violates unique constraint" in lowered
+        and "ingredient_foods_name_group_id_key" in lowered
+    )
+
+
+def _short_error(exc: Exception, max_len: int = 220) -> str:
+    text = str(exc).replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len-3]}..."
+
+
 def run_parser(config: ParserConfig) -> RunSummary:
     if not config.base_url:
         raise ValueError("MEALIE_BASE_URL is required")
@@ -218,6 +265,7 @@ def run_parser(config: ParserConfig) -> RunSummary:
     summary = RunSummary()
     reviews: list[dict[str, Any]] = []
     successes: list[str] = []
+    food_log_state = FoodCreateLogState(duplicate_logged=set(), failed_logged=set())
 
     slugs = client.get_unparsed_recipe_slugs(page_size=config.page_size)
 
@@ -242,7 +290,12 @@ def run_parser(config: ParserConfig) -> RunSummary:
         LOGGER.info("No unparsed recipes found")
         return summary
 
-    for slug in tqdm(slugs, desc="Parsing", unit="recipe"):
+    show_progress_bar = sys.stderr.isatty()
+    line_logs = not show_progress_bar
+    iterator = tqdm(slugs, desc="Parsing", unit="recipe", disable=not show_progress_bar)
+
+    for index, slug in enumerate(iterator, start=1):
+        started = time.monotonic()
         try:
             recipe = client.get_recipe(slug)
         except requests.RequestException as exc:
@@ -285,9 +338,21 @@ def run_parser(config: ParserConfig) -> RunSummary:
                     "attempts": attempts,
                 }
             )
+            if line_logs:
+                LOGGER.info(
+                    (
+                        "recipe=%s index=%s/%s status=review "
+                        "reason=parser_failed_threshold"
+                    ),
+                    slug,
+                    index,
+                    summary.total_candidates,
+                )
             continue
 
-        normalized, suspicious = normalize_parsed_block(client, parsed_block)
+        normalized, suspicious = normalize_parsed_block(
+            client, parsed_block, food_log_state
+        )
         if suspicious:
             reviews.append(
                 {
@@ -299,12 +364,28 @@ def run_parser(config: ParserConfig) -> RunSummary:
                     "parsed": normalized,
                 }
             )
+            if line_logs:
+                LOGGER.info(
+                    (
+                        "recipe=%s index=%s/%s status=review "
+                        "reason=suspicious_result parser=%s"
+                    ),
+                    slug,
+                    index,
+                    summary.total_candidates,
+                    parser_used,
+                )
             continue
 
         if config.dry_run:
-            LOGGER.info(
-                "[dry-run] Would patch '%s' using parser '%s'", slug, parser_used
-            )
+            if line_logs:
+                LOGGER.info(
+                    "recipe=%s index=%s/%s status=dry_run parser=%s",
+                    slug,
+                    index,
+                    summary.total_candidates,
+                    parser_used,
+                )
         else:
             try:
                 client.patch_recipe_ingredients(slug, normalized)
@@ -319,10 +400,43 @@ def run_parser(config: ParserConfig) -> RunSummary:
                         "parsed": normalized,
                     }
                 )
+                if line_logs:
+                    LOGGER.warning(
+                        (
+                            "recipe=%s index=%s/%s status=review "
+                            "reason=patch_failed error=%s"
+                        ),
+                        slug,
+                        index,
+                        summary.total_candidates,
+                        _short_error(exc),
+                    )
                 continue
 
         successes.append(recipe_name)
         summary.parsed_successfully += 1
+        if line_logs:
+            LOGGER.info(
+                "recipe=%s index=%s/%s status=ok parser=%s duration=%.2fs",
+                slug,
+                index,
+                summary.total_candidates,
+                parser_used,
+                time.monotonic() - started,
+            )
+
+        if not show_progress_bar and (
+            index == 1 or index == summary.total_candidates or index % 25 == 0
+        ):
+            LOGGER.info(
+                "progress=%s/%s ok=%s review=%s skipped_empty=%s skipped_parsed=%s",
+                index,
+                summary.total_candidates,
+                summary.parsed_successfully,
+                len(reviews),
+                summary.skipped_empty,
+                summary.skipped_already_parsed,
+            )
 
         if config.delay_seconds > 0:
             time.sleep(config.delay_seconds)

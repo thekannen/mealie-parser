@@ -107,9 +107,9 @@ class MealieClient:
             raise requests.HTTPError(f"{method} {url} failed: {exc}") from exc
 
         if response.status_code >= 400:
-            details = response.text
+            details = _truncate(response.text)
             try:
-                details = str(response.json())
+                details = _summarize_error_payload(response.json())
             except ValueError:
                 pass
             raise requests.HTTPError(
@@ -130,3 +130,37 @@ def _authorization_value(token: str) -> str:
     if value.lower().startswith("bearer "):
         return value
     return f"Bearer {value}"
+
+
+def _summarize_error_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, str):
+            return _truncate(detail)
+
+        if isinstance(detail, dict):
+            message = detail.get("message")
+            exception = str(detail.get("exception") or "").strip()
+
+            if "duplicate key value violates unique constraint" in exception.lower():
+                return "duplicate key violation"
+
+            if message and exception:
+                return _truncate(f"{message}: {exception}")
+            if message:
+                return _truncate(str(message))
+            return _truncate(str(detail))
+
+        return _truncate(str(payload))
+
+    if isinstance(payload, list):
+        return _truncate(str(payload))
+
+    return _truncate(str(payload))
+
+
+def _truncate(value: str, max_len: int = 220) -> str:
+    text = value.replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len-3]}..."

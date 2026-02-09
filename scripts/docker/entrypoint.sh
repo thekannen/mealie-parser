@@ -3,9 +3,20 @@ set -euo pipefail
 
 RUN_MODE="${RUN_MODE:-once}"
 RUN_INTERVAL_SECONDS="${RUN_INTERVAL_SECONDS:-21600}"
+PARSER_ARGS="${PARSER_ARGS:-}"
+
+if [ "$#" -gt 0 ]; then
+  PARSER_ARGS="$*"
+fi
 
 run_once() {
-  python -m mealie_parser
+  echo "[run] Starting mealie_parser (args=${PARSER_ARGS:-<none>})"
+  if [ -n "$PARSER_ARGS" ]; then
+    # shellcheck disable=SC2086
+    python -m mealie_parser $PARSER_ARGS
+  else
+    python -m mealie_parser
+  fi
 }
 
 if [ "$RUN_MODE" = "loop" ]; then
