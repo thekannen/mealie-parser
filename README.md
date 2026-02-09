@@ -132,6 +132,8 @@ Notes:
 - Exact weekly scheduling at Sunday 6:00 AM is best done with host cron/systemd timers; interval loop mode cannot align to weekday/time boundaries by itself.
 - In non-interactive runs (Docker/Portainer), parser output is emitted as one structured line per recipe instead of a tqdm progress bar.
 - `docker-compose.yml` uses `restart: on-failure` so successful `RUN_MODE=once` runs do not auto-restart in a tight loop.
+- Repeated review patterns are log-sampled (`seen=<n>`) to keep logs readable; full per-recipe details remain in `reports/review_low_confidence.json`.
+- Fully blank parsed ingredient artifacts are auto-dropped so a single empty line does not block patching the rest of a recipe.
 
 ## Local development / manual Linux run
 

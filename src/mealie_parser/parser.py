@@ -5,6 +5,7 @@ import logging
 import re
 import sys
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any
 
@@ -31,12 +32,18 @@ class RunSummary:
     requires_review: int = 0
     skipped_empty: int = 0
     skipped_already_parsed: int = 0
+    dropped_blank_ingredients: int = 0
 
 
 @dataclass
 class FoodCreateLogState:
     duplicate_logged: set[str]
     failed_logged: set[str]
+
+
+@dataclass
+class ReviewLogState:
+    signature_counts: dict[str, int]
 
 
 def slim(obj: dict[str, Any] | None) -> dict[str, str] | None:
@@ -101,7 +108,7 @@ def parse_with_fallback(
         try:
             parsed = client.parse_ingredients(lines, strategy=strategy)
         except requests.RequestException as exc:
-            attempts.append({"strategy": strategy, "error": str(exc)})
+            attempts.append({"strategy": strategy, "error": _short_text(str(exc))})
             continue
 
         if not parsed:
@@ -117,9 +124,15 @@ def parse_with_fallback(
             )
             continue
 
-        if any(looks_suspicious(item.get("ingredient") or {}) for item in parsed):
+        suspicious_counts = _suspicious_reason_counts(
+            [item.get("ingredient") or {} for item in parsed]
+        )
+        if suspicious_counts:
             attempts.append(
-                {"strategy": strategy, "error": "suspicious ingredient shape"}
+                {
+                    "strategy": strategy,
+                    "error": f"suspicious:{_format_reason_counts(suspicious_counts)}",
+                }
             )
             continue
 
@@ -173,9 +186,10 @@ def normalize_parsed_block(
     client: MealieClient,
     parsed_block: list[dict[str, Any]],
     log_state: FoodCreateLogState,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, Any]], dict[str, int], int]:
     normalized: list[dict[str, Any]] = []
-    has_suspicious_line = False
+    suspicious_reasons: dict[str, int] = defaultdict(int)
+    dropped_blank = 0
 
     for item in parsed_block:
         ingredient = dict(item.get("ingredient") or {})
@@ -188,29 +202,68 @@ def normalize_parsed_block(
         ingredient.pop("confidence", None)
         ingredient.pop("display", None)
 
-        if looks_suspicious(ingredient):
-            has_suspicious_line = True
+        if _is_blank_ingredient(ingredient):
+            dropped_blank += 1
+            continue
+
+        reason = _suspicion_reason(ingredient)
+        if reason is not None:
+            suspicious_reasons[reason] += 1
 
         normalized.append(ingredient)
 
-    return normalized, has_suspicious_line
+    return normalized, dict(suspicious_reasons), dropped_blank
 
 
 def looks_suspicious(ingredient: dict[str, Any]) -> bool:
+    return _suspicion_reason(ingredient) is not None
+
+
+def _suspicion_reason(ingredient: dict[str, Any]) -> str | None:
+    if _is_blank_ingredient(ingredient):
+        return None
+
     note = str(ingredient.get("note", "")).strip().lower()
     if any(phrase in note for phrase in SERVING_PHRASES):
-        return False
+        return None
 
     quantity = _quantity_value(ingredient.get("quantity"))
     unit = ingredient.get("unit")
 
     if quantity == 0 and unit is not None:
-        return True
+        return "zero_qty_with_unit"
 
     if ingredient.get("food") is None and not note:
-        return True
+        return "missing_food_no_note"
 
-    return False
+    return None
+
+
+def _is_blank_ingredient(ingredient: dict[str, Any]) -> bool:
+    note = str(ingredient.get("note", "")).strip()
+    quantity = _quantity_value(ingredient.get("quantity"))
+    has_food = _has_entity(ingredient.get("food"))
+    has_unit = _has_entity(ingredient.get("unit"))
+    return not note and quantity == 0 and not has_food and not has_unit
+
+
+def _has_entity(entity: Any) -> bool:
+    if entity is None:
+        return False
+    if isinstance(entity, dict):
+        entity_id = str(entity.get("id") or "").strip()
+        entity_name = str(entity.get("name") or "").strip()
+        return bool(entity_id or entity_name)
+    return True
+
+
+def _suspicious_reason_counts(ingredients: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for ingredient in ingredients:
+        reason = _suspicion_reason(ingredient)
+        if reason is not None:
+            counts[reason] += 1
+    return dict(counts)
 
 
 def _confidence(parsed_line: dict[str, Any]) -> float:
@@ -237,11 +290,15 @@ def _is_duplicate_food_error(message: str) -> bool:
     )
 
 
+def _short_text(text: str, max_len: int = 220) -> str:
+    clean = text.replace("\n", " ").strip()
+    if len(clean) <= max_len:
+        return clean
+    return f"{clean[:max_len-3]}..."
+
+
 def _short_error(exc: Exception, max_len: int = 220) -> str:
-    text = str(exc).replace("\n", " ").strip()
-    if len(text) <= max_len:
-        return text
-    return f"{text[:max_len-3]}..."
+    return _short_text(str(exc), max_len=max_len)
 
 
 def _format_attempts(attempts: list[dict[str, str]]) -> str:
@@ -251,6 +308,26 @@ def _format_attempts(attempts: list[dict[str, str]]) -> str:
         f"{item.get('strategy', '?')}={item.get('error', 'unknown')}"
         for item in attempts
     )
+
+
+def _format_reason_counts(reason_counts: dict[str, int]) -> str:
+    if not reason_counts:
+        return "none"
+    pairs = [f"{reason}:{count}" for reason, count in sorted(reason_counts.items())]
+    return ",".join(pairs)
+
+
+def _should_emit_review_log(
+    log_state: ReviewLogState,
+    signature: str,
+    *,
+    first_n: int = 3,
+    every_n: int = 10,
+) -> tuple[bool, int]:
+    count = log_state.signature_counts.get(signature, 0) + 1
+    log_state.signature_counts[signature] = count
+    should_emit = count <= first_n or count % every_n == 0
+    return should_emit, count
 
 
 def run_parser(config: ParserConfig) -> RunSummary:
@@ -275,6 +352,7 @@ def run_parser(config: ParserConfig) -> RunSummary:
     reviews: list[dict[str, Any]] = []
     successes: list[str] = []
     food_log_state = FoodCreateLogState(duplicate_logged=set(), failed_logged=set())
+    review_log_state = ReviewLogState(signature_counts={})
 
     slugs = client.get_unparsed_recipe_slugs(page_size=config.page_size)
 
@@ -338,6 +416,7 @@ def run_parser(config: ParserConfig) -> RunSummary:
         )
 
         if parser_used is None:
+            attempts_text = _format_attempts(attempts)
             reviews.append(
                 {
                     "slug": slug,
@@ -348,22 +427,61 @@ def run_parser(config: ParserConfig) -> RunSummary:
                 }
             )
             if line_logs:
+                signature = f"parser_failed_threshold|{attempts_text}"
+                should_emit, seen = _should_emit_review_log(review_log_state, signature)
+                if should_emit:
+                    LOGGER.info(
+                        (
+                            "recipe=%s index=%s/%s status=review "
+                            "reason=parser_failed_threshold attempts=%s seen=%s"
+                        ),
+                        slug,
+                        index,
+                        summary.total_candidates,
+                        attempts_text,
+                        seen,
+                    )
+            continue
+
+        normalized, suspicious_reasons, dropped_blank = normalize_parsed_block(
+            client, parsed_block, food_log_state
+        )
+        if dropped_blank:
+            summary.dropped_blank_ingredients += dropped_blank
+            if line_logs:
+                LOGGER.info(
+                    "recipe=%s index=%s/%s status=cleanup dropped_blank=%s",
+                    slug,
+                    index,
+                    summary.total_candidates,
+                    dropped_blank,
+                )
+
+        if not normalized:
+            reviews.append(
+                {
+                    "slug": slug,
+                    "name": recipe_name,
+                    "reason": "no_usable_ingredients_after_cleanup",
+                    "parser": parser_used,
+                    "raw_lines": raw_lines,
+                }
+            )
+            if line_logs:
                 LOGGER.info(
                     (
                         "recipe=%s index=%s/%s status=review "
-                        "reason=parser_failed_threshold attempts=%s"
+                        "reason=no_usable_ingredients_after_cleanup parser=%s"
                     ),
                     slug,
                     index,
                     summary.total_candidates,
-                    _format_attempts(attempts),
+                    parser_used,
                 )
             continue
 
-        normalized, suspicious = normalize_parsed_block(
-            client, parsed_block, food_log_state
-        )
-        if suspicious:
+        if suspicious_reasons:
+            suspicious_text = _format_reason_counts(suspicious_reasons)
             reviews.append(
                 {
                     "slug": slug,
@@ -372,19 +490,25 @@ def run_parser(config: ParserConfig) -> RunSummary:
                     "parser": parser_used,
                     "raw_lines": raw_lines,
                     "parsed": normalized,
+                    "suspicious_reasons": suspicious_reasons,
                 }
             )
             if line_logs:
-                LOGGER.info(
-                    (
-                        "recipe=%s index=%s/%s status=review "
-                        "reason=suspicious_result parser=%s"
-                    ),
-                    slug,
-                    index,
-                    summary.total_candidates,
-                    parser_used,
-                )
+                signature = f"suspicious_result|{parser_used}|{suspicious_text}"
+                should_emit, seen = _should_emit_review_log(review_log_state, signature)
+                if should_emit:
+                    LOGGER.info(
+                        (
+                            "recipe=%s index=%s/%s status=review "
+                            "reason=suspicious_result parser=%s suspicious=%s seen=%s"
+                        ),
+                        slug,
+                        index,
+                        summary.total_candidates,
+                        parser_used,
+                        suspicious_text,
+                        seen,
+                    )
             continue
 
         if config.dry_run:
@@ -411,16 +535,23 @@ def run_parser(config: ParserConfig) -> RunSummary:
                     }
                 )
                 if line_logs:
-                    LOGGER.warning(
-                        (
-                            "recipe=%s index=%s/%s status=review "
-                            "reason=patch_failed error=%s"
-                        ),
-                        slug,
-                        index,
-                        summary.total_candidates,
-                        _short_error(exc),
+                    patch_error = _short_error(exc)
+                    signature = f"patch_failed|{patch_error}"
+                    should_emit, seen = _should_emit_review_log(
+                        review_log_state, signature
                     )
+                    if should_emit:
+                        LOGGER.warning(
+                            (
+                                "recipe=%s index=%s/%s status=review "
+                                "reason=patch_failed error=%s seen=%s"
+                            ),
+                            slug,
+                            index,
+                            summary.total_candidates,
+                            patch_error,
+                            seen,
+                        )
                 continue
 
         successes.append(recipe_name)
@@ -461,5 +592,17 @@ def run_parser(config: ParserConfig) -> RunSummary:
         review_path.write_text(json.dumps(reviews, indent=2), encoding="utf-8")
         summary.requires_review = len(reviews)
         LOGGER.info("%s recipes need review; wrote %s", len(reviews), review_path)
+
+    if review_log_state.signature_counts:
+        top_signatures = sorted(
+            review_log_state.signature_counts.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:5]
+        signature_text = " | ".join(
+            f"{count}x {_short_text(signature, max_len=120)}"
+            for signature, count in top_signatures
+        )
+        LOGGER.info("review_signature_summary top=%s", signature_text)
 
     return summary

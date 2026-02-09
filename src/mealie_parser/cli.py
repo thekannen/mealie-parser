@@ -102,13 +102,14 @@ def main() -> int:
     logging.info(
         (
             "Finished. candidates=%s parsed=%s review=%s "
-            "skipped_empty=%s skipped_already_parsed=%s"
+            "skipped_empty=%s skipped_already_parsed=%s dropped_blank=%s"
         ),
         summary.total_candidates,
         summary.parsed_successfully,
         summary.requires_review,
         summary.skipped_empty,
         summary.skipped_already_parsed,
+        summary.dropped_blank_ingredients,
     )
     return 0
 
